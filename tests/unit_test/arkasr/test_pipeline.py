@@ -3,22 +3,20 @@
 
 import inspect
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 import torch
-import torch.nn as nn
 from sglang.srt.arg_groups.cuda_graph_hook import (
     generate_prefill_cuda_graph_batch_sizes,
 )
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
+from torch import nn
 from transformers import WhisperConfig
 
 import sglang_omni.model_runner.base as model_runner_base
 import sglang_omni.models.arkasr.engine_builder as arkasr_builder
-import sglang_omni.platforms as platforms
-import sglang_omni.scheduling.bootstrap as bootstrap
-import sglang_omni.scheduling.omni_scheduler as omni_scheduler
-import sglang_omni.scheduling.sglang_backend as sglang_backend
+from sglang_omni import platforms
 from sglang_omni.models.arkasr import request_builders
 from sglang_omni.models.arkasr.audio_lengths import (
     arkasr_audio_token_lengths,
@@ -31,6 +29,7 @@ from sglang_omni.models.arkasr.request_builders import build_suppressed_token_id
 from sglang_omni.models.arkasr.sglang_model import ArkasrForConditionalGeneration
 from sglang_omni.models.arkasr.stages import create_sglang_arkasr_executor
 from sglang_omni.models.registry import PIPELINE_CONFIG_REGISTRY
+from sglang_omni.scheduling import bootstrap, omni_scheduler, sglang_backend
 
 
 def _tiny_config():
@@ -493,10 +492,10 @@ def test_arkasr_config_keeps_lm_params_at_top_level():
     assert cfg.num_hidden_layers == 2
 
 
-def test_arkasr_import_does_not_register_auto_config():
+def test_arkasr_import_registers_local_auto_config():
     from transformers.models.auto.configuration_auto import CONFIG_MAPPING
 
-    assert "arkasr" not in CONFIG_MAPPING._extra_content
+    assert CONFIG_MAPPING["arkasr"] is ArkasrConfig
 
 
 def test_ark_audio_tower_forward_shape():
@@ -654,7 +653,7 @@ def test_ark_suppressed_token_ids():
 
     class _FakeTok:
         eos_token_id = 100
-        all_special_ids = [100, 101, 102]
+        all_special_ids: ClassVar[list[int]] = [100, 101, 102]
 
         def get_added_vocab(self):
             return {
