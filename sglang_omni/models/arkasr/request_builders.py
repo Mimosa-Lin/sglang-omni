@@ -12,9 +12,8 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import torch
 from sglang.srt.managers.schedule_batch import (
@@ -80,10 +79,12 @@ def build_suppressed_token_ids(tokenizer: Any) -> list[int]:
     tokens) except EOS at generation. Returned sorted for determinism.
     """
     eos = tokenizer.eos_token_id
-    keep = {int(eos)} if isinstance(eos, int) else {int(x) for x in (eos or [])}
-    bad = {int(i) for i in (tokenizer.all_special_ids or [])}
-    get_added_vocab = getattr(tokenizer, "get_added_vocab", None)
-    added = get_added_vocab() if callable(get_added_vocab) else {}
+    keep = {int(eos)} if isinstance(eos, int) else set(int(x) for x in (eos or []))
+    bad: set[int] = set(int(i) for i in (tokenizer.all_special_ids or []))
+    try:
+        added = tokenizer.get_added_vocab()
+    except Exception:
+        added = {}
     for tok, tid in added.items():
         if isinstance(tok, str) and tok.startswith("<") and tok.endswith(">"):
             bad.add(int(tid))
@@ -247,6 +248,7 @@ def make_arkasr_scheduler_adapters(
     def result_adapter(data: ArkASRRequestData) -> StagePayload:
         payload = data.stage_payload
         output_ids = list(data.output_ids or [])
+        # CUDA uses sampling bias; MLX relies on this marker-token filter.
         if _suppressed_ids:
             _drop = set(_suppressed_ids)
             output_ids = [t for t in output_ids if t not in _drop]
