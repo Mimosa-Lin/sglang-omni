@@ -21,6 +21,7 @@ HTTP API -> Client -> Coordinator -> Stage -> Scheduler -> ModelRunner -> model 
 | [ModelRunner](./pipeline.md)      | AR forward preparation, model forward dispatch, output extraction                      |
 | [Communication](./communication.md) | Control-plane messages and relay data transfer between stages                         |
 | [TTS Integration](./tts_model_integration.md) | Checklist and lifecycle rules for adding TTS model families                         |
+| [Qwen2.5-Omni MLX 集成草案](./qwen2_5_omni_mlx_integration_zh.md) | 面向 Apple Silicon 的分阶段模型移植、量化、测试与内存设计 |
 
 Refer to the layer-specific document for specific design details.
 
