@@ -19,6 +19,7 @@ from typing import Any, Literal, Mapping
 
 import torch
 
+from sglang_omni.models.fun_cosyvoice3.packed_dit import PackedDiT
 from sglang_omni.models.fun_cosyvoice3.payload_types import FunCosyVoice3State
 from sglang_omni.models.fun_cosyvoice3.stages import CosyVoice3Vocoder, FlowBatchInput
 from sglang_omni.models.fun_cosyvoice3.streaming import (
@@ -137,17 +138,7 @@ class FunCosyVoice3StreamingVocoderScheduler(
         # note(ratish): one hop and one final through Flow and HiFT before the
         # stage publishes readiness, so the first request pays neither the
         # attention kernel load nor the f0 cast.
-        flow = self.vocoder.flow
-        item = FlowBatchInput(
-            token=torch.zeros(
-                1, self.token_hop_len + PRE_LOOKAHEAD_LEN, dtype=torch.int32
-            ),
-            prompt_token=torch.zeros(1, self.token_hop_len, dtype=torch.int32),
-            prompt_feat=torch.zeros(
-                1, self.token_hop_len * TOKEN_MEL_RATIO, flow.output_size
-            ),
-            embedding=torch.zeros(1, flow.spk_embed_affine_layer.in_features),
-        )
+        item = self.make_warmup_flow_input(self.token_hop_len + PRE_LOOKAHEAD_LEN)
         # note(ratish): under the vocoder's stream, so the warmup and not the
         # first request builds that stream's memory pool and cuBLAS workspaces,
         # which PyTorch keeps per stream.
@@ -161,6 +152,49 @@ class FunCosyVoice3StreamingVocoderScheduler(
         final_s = time.monotonic() - started - hop_s
         logger.info(
             f"Fun-CosyVoice3 vocoder warmup: hop {hop_s:.1f} s, final {final_s:.1f} s"
+        )
+
+    def warmup_packed_dit_compile(self) -> None:
+        """Materialize PackedDiT contracts before the process becomes ready."""
+        packed_estimator = self.vocoder.flow.packed_estimator
+        if not isinstance(packed_estimator, PackedDiT):
+            raise RuntimeError(
+                "Fun-CosyVoice3 PackedDiT compile warmup requires a PackedDiT estimator"
+            )
+        else:
+            pass
+        if not packed_estimator.compile(self.vocoder.autocast_dtype):
+            return
+        else:
+            pass
+        hop_tokens = self.token_hop_len + PRE_LOOKAHEAD_LEN
+        first = [self.make_warmup_flow_input(hop_tokens)]
+        # note(ratish): a second row count and length,
+        # so the sizes serving varies turn symbolic at startup, not on a request.
+        second = [
+            self.make_warmup_flow_input(hop_tokens),
+            self.make_warmup_flow_input(hop_tokens + self.token_hop_len),
+        ]
+        started = time.monotonic()
+        with self.vocoder.stream_context:
+            for items in (first, second):
+                self.vocoder.hop_batch(items)
+                self.vocoder.leftover_batch(items)
+        logger.info(
+            f"Fun-CosyVoice3 PackedDiT compile warmup, hop and final, with "
+            f"torch_num_threads={torch.get_num_threads()} "
+            f"({time.monotonic() - started:.1f} s)"
+        )
+
+    def make_warmup_flow_input(self, token_count: int) -> FlowBatchInput:
+        flow = self.vocoder.flow
+        return FlowBatchInput(
+            token=torch.zeros(1, token_count, dtype=torch.int32),
+            prompt_token=torch.zeros(1, self.token_hop_len, dtype=torch.int32),
+            prompt_feat=torch.zeros(
+                1, self.token_hop_len * TOKEN_MEL_RATIO, flow.output_size
+            ),
+            embedding=torch.zeros(1, flow.spk_embed_affine_layer.in_features),
         )
 
     def latch_stream_contract(
