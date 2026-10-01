@@ -487,9 +487,9 @@ def test_apple_rejects_sampling_before_preprocessing(monkeypatch):
 
     monkeypatch.setattr(request_builders, "prepare_audio", unexpected)
     build, _ = request_builders.make_fun_asr_scheduler_adapters(
-        tokenizer=_FakeTokenizer(),
+        tokenizer=FakeTokenizer(),
         max_new_tokens=32,
-        feature_extractor=_feature_extractor(17),
+        feature_extractor=feature_extractor(17),
         greedy_only=True,
     )
     payload = StagePayload(

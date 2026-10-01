@@ -20,10 +20,10 @@ from sglang_omni.models.registry import PIPELINE_CONFIG_REGISTRY
 
 
 @pytest.fixture(autouse=True)
-def _select_non_mlx_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+def select_non_mlx_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     import sglang.srt.hardware_backend.mlx.runtime as mlx_runtime
 
-    # Backend-specific tests (e.g. _apple_builder) opt into MLX explicitly.
+    # Backend-specific tests (e.g. apple_builder) opt into MLX explicitly.
     # Keep CUDA/ROCm/Torch MPS profile tests independent of the caller's
     # SGLANG_USE_MLX environment.
     monkeypatch.setattr(mlx_runtime, "use_mlx", lambda: False)
@@ -339,7 +339,7 @@ def test_fun_asr_declares_breakable_prefill_cuda_graph_support() -> None:
     assert fun_asr_builder.FunASREngineBuilder.supports_breakable_prefill_cuda_graph
 
 
-def _apple_builder(monkeypatch, *, mlx):
+def apple_builder(monkeypatch, *, mlx):
     from sglang.srt.hardware_backend.mlx import runtime as mlx_runtime
 
     monkeypatch.setattr(mlx_runtime, "use_mlx", lambda: mlx)
@@ -359,7 +359,7 @@ def _apple_builder(monkeypatch, *, mlx):
 
 @pytest.mark.parametrize("mlx", [False])
 def test_apple_profile_skips_cuda_resources_and_uses_greedy_requests(monkeypatch, mlx):
-    builder = _apple_builder(monkeypatch, mlx=mlx)
+    builder = apple_builder(monkeypatch, mlx=mlx)
     defaults = builder.generation_defaults(dtype="bfloat16")
     assert defaults["max_running_requests"] == 1
     assert defaults["disable_cuda_graph"]
@@ -398,7 +398,7 @@ def test_apple_profile_skips_cuda_resources_and_uses_greedy_requests(monkeypatch
     ],
 )
 def test_apple_rejects_unsupported_runtime_options(monkeypatch, mlx, override, match):
-    builder = _apple_builder(monkeypatch, mlx=mlx)
+    builder = apple_builder(monkeypatch, mlx=mlx)
     args = {
         **builder.generation_defaults(dtype="bfloat16"),
         "mlx_enable_sampling": False,
@@ -410,6 +410,6 @@ def test_apple_rejects_unsupported_runtime_options(monkeypatch, mlx, override, m
 
 
 def test_mlx_rejected_before_infrastructure(monkeypatch):
-    builder = _apple_builder(monkeypatch, mlx=True)
+    builder = apple_builder(monkeypatch, mlx=True)
     with pytest.raises(ValueError, match="set SGLANG_USE_MLX=0"):
         builder.generation_defaults(dtype="bfloat16")

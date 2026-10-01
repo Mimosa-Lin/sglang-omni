@@ -36,7 +36,7 @@ def audio():
     return _AUDIO.read_bytes()
 
 
-def _transcribe(audio, **params):
+def transcribe(audio, **params):
     return requests.post(
         f"{_URL}/v1/audio/transcriptions",
         files={"file": ("audio.wav", audio, "audio/wav")},
@@ -45,7 +45,7 @@ def _transcribe(audio, **params):
     )
 
 
-def _wav(seconds):
+def wav(seconds):
     buffer = io.BytesIO()
     sf.write(
         buffer, np.zeros(int(16000 * seconds), dtype=np.float32), 16000, format="WAV"
@@ -53,13 +53,13 @@ def _wav(seconds):
     return buffer.getvalue()
 
 
-def _encode(samples, sample_rate, fmt):
+def encode(samples, sample_rate, fmt):
     buffer = io.BytesIO()
     sf.write(buffer, samples, sample_rate, format=fmt)
     return buffer.getvalue()
 
 
-def _to_m4a(wav_bytes, output_path):
+def to_m4a(wav_bytes, output_path):
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         pytest.skip("ffmpeg is required to encode the M4A fixture")
@@ -100,11 +100,11 @@ def real_speech_samples(audio):
 
 
 def test_json_sse_and_queued_requests_match(audio):
-    response = _transcribe(audio)
+    response = transcribe(audio)
     response.raise_for_status()
     expected = response.json()["text"]
     assert "cars" in expected.lower()
-    streamed = _transcribe(audio, stream="true")
+    streamed = transcribe(audio, stream="true")
     streamed.raise_for_status()
     records = [
         line[6:] for line in streamed.text.splitlines() if line.startswith("data: ")
@@ -123,22 +123,22 @@ def test_json_sse_and_queued_requests_match(audio):
         == expected
     )
     with ThreadPoolExecutor(max_workers=4) as pool:
-        responses = list(pool.map(_transcribe, [audio] * 4))
+        responses = list(pool.map(transcribe, [audio] * 4))
     for response in responses:
         response.raise_for_status()
         assert response.json()["text"] == expected
 
 
 def test_invalid_requests_leave_server_healthy(audio):
-    assert _transcribe(audio, temperature="0.5").status_code == 400
-    assert _transcribe(_wav(30.01)).status_code == 400
-    assert _transcribe(b"not an audio file").status_code == 400
-    _transcribe(audio).raise_for_status()
+    assert transcribe(audio, temperature="0.5").status_code == 400
+    assert transcribe(wav(30.01)).status_code == 400
+    assert transcribe(b"not an audio file").status_code == 400
+    transcribe(audio).raise_for_status()
     requests.get(f"{_URL}/health", timeout=10).raise_for_status()
 
 
 def test_audio_at_duration_limit():
-    _transcribe(_wav(30), max_new_tokens="16").raise_for_status()
+    transcribe(wav(30), max_new_tokens="16").raise_for_status()
 
 
 def test_real_speech_near_thirty_seconds_uses_default_budget(real_speech_samples):
@@ -153,7 +153,7 @@ def test_real_speech_near_thirty_seconds_uses_default_budget(real_speech_samples
     repeats = -(-target_samples // len(unit))
     near_thirty = np.tile(unit, repeats)[:target_samples]
 
-    response = _transcribe(_encode(near_thirty, 16000, "WAV"))
+    response = transcribe(encode(near_thirty, 16000, "WAV"))
     response.raise_for_status()
     assert "cars" in response.json()["text"].lower()
 
@@ -164,7 +164,7 @@ def test_mp3_upload_transcribes_correctly(audio):
     mp3_response = requests.post(
         f"{_URL}/v1/audio/transcriptions",
         files={
-            "file": ("audio.mp3", _encode(samples, sample_rate, "MP3"), "audio/mpeg")
+            "file": ("audio.mp3", encode(samples, sample_rate, "MP3"), "audio/mpeg")
         },
         data={"language": "en"},
         timeout=120,
@@ -177,7 +177,7 @@ def test_m4a_upload_transcribes_correctly(audio, tmp_path):
     m4a_response = requests.post(
         f"{_URL}/v1/audio/transcriptions",
         files={
-            "file": ("audio.m4a", _to_m4a(audio, tmp_path / "audio.m4a"), "audio/mp4")
+            "file": ("audio.m4a", to_m4a(audio, tmp_path / "audio.m4a"), "audio/mp4")
         },
         data={"language": "en"},
         timeout=120,
@@ -192,7 +192,7 @@ def test_varied_sample_rates_transcribe_correctly(real_speech_samples, sample_ra
         real_speech_samples, int(len(real_speech_samples) * sample_rate / 16000)
     ).astype(np.float32)
 
-    response = _transcribe(_encode(resampled, sample_rate, "WAV"))
+    response = transcribe(encode(resampled, sample_rate, "WAV"))
     response.raise_for_status()
     assert "cars" in response.json()["text"].lower()
 
@@ -201,13 +201,13 @@ def test_silence_and_noise_do_not_hallucinate_or_break_the_server():
     # Real ASR models can loop into repeated hallucinated phrases when fed
     # non-speech input. Bound the output size as a coarse well-behaved check,
     # and confirm the server stays healthy afterward either way.
-    silence_response = _transcribe(_wav(3), max_new_tokens="32")
+    silence_response = transcribe(wav(3), max_new_tokens="32")
     silence_response.raise_for_status()
     assert len(silence_response.json()["text"]) < 200
 
     rng = np.random.default_rng(0)
     noise = (rng.standard_normal(16000 * 3) * 0.05).astype(np.float32)
-    noise_response = _transcribe(_encode(noise, 16000, "WAV"), max_new_tokens="32")
+    noise_response = transcribe(encode(noise, 16000, "WAV"), max_new_tokens="32")
     noise_response.raise_for_status()
     assert len(noise_response.json()["text"]) < 200
 
@@ -233,6 +233,6 @@ def test_disconnect_releases_request_and_next_request_succeeds(audio):
             break
         assert time.monotonic() < deadline, health
         time.sleep(0.05)
-    recovered = _transcribe(audio)
+    recovered = transcribe(audio)
     recovered.raise_for_status()
     assert "cars" in recovered.json()["text"].lower()
