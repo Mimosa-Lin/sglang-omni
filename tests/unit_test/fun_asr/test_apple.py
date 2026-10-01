@@ -152,6 +152,61 @@ def test_mlx_prefill_replaces_hashed_audio_and_decode_uses_cache(mlx_device):
     assert cache[0].offset == 5
 
 
+def test_mlx_runner_real_init_prefill_decode(monkeypatch):
+    from sglang_omni.models.fun_asr.mlx.runner import make_fun_asr_mlx_runner_class
+
+    runner_class = make_fun_asr_mlx_runner_class()
+    model = FunASRModel(tiny_config())
+    # Only weight loading is stubbed; SGLang's constructor owns the request state.
+    monkeypatch.setattr(
+        runner_class, "_load_model", lambda self: setattr(self, "model", model)
+    )
+    monkeypatch.setattr(mx, "set_wired_limit", lambda limit: 0)
+    runner = runner_class(model_path="unused", disable_radix_cache=True, pool_size=16)
+    runner.init_cache_pools(None)
+    req = SimpleNamespace(
+        multimodal_inputs=SimpleNamespace(
+            audio_token_id=10,
+            mm_items=[
+                SimpleNamespace(
+                    feature=torch.zeros(1, 8, 16),
+                    feature_attention_mask=torch.ones(1, 16),
+                    pad_value=999,
+                )
+            ],
+        )
+    )
+    token_ids = [1, 999, 999, 2]
+
+    pending = runner.prefill_start(
+        "req", token_ids, token_ids, [], [1, 2, 3, 4], 1, req=req
+    )
+    mx.eval(pending.lazy_token)
+    first = runner.prefill_finalize(pending)
+    step = runner.decode_batch_start(["req"])
+    chained = runner.decode_batch_start_chained(step)
+    mx.eval(chained.lazy_tokens)
+    generated = [first]
+    generated += runner.decode_batch_finalize(step)
+    generated += runner.decode_batch_finalize(chained)
+
+    _ids, embeddings = runner.audio_prefill_inputs(req, token_ids)
+    expected = []
+    for _ in range(3):
+        logits = model.forward_last_logits(embeddings)
+        token = mx.argmax(logits[:, -1], axis=-1)
+        expected.append(int(token.item()))
+        embeddings = mx.concatenate(
+            [embeddings, model.model.embed_tokens(token[:, None])], axis=1
+        )
+    assert generated == expected
+    assert runner.has_request("req")
+
+    runner.remove_request("req")
+
+    assert not runner.has_request("req")
+
+
 def test_mlx_rejects_audio_placeholder_mismatch():
     model = FunASRModel(tiny_config())
     with pytest.raises(ValueError, match="placeholder span"):
