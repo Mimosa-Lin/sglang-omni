@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from sglang.srt.managers.mm_utils import init_mm_embedding_cache
-from transformers import AutoFeatureExtractor, AutoTokenizer
+from sglang.srt.server_args import ServerArgs
+from transformers import AutoFeatureExtractor, AutoTokenizer, PreTrainedTokenizerBase
 
+from sglang_omni.model_runner.base import ModelRunner
+from sglang_omni.model_runner.model_worker import ModelWorker
 from sglang_omni.models.fun_asr import request_builders
+from sglang_omni.models.fun_asr.configuration_fun_asr import FunAsrNanoFeatureExtractor
 from sglang_omni.models.fun_asr.encoder_service import (
     FunASRPreLMEncoderService,
     build_cache_namespace,
@@ -18,17 +23,33 @@ from sglang_omni.models.fun_asr.tool_funcs.audio_lengths import (
     fun_asr_low_frame_rate_length,
 )
 from sglang_omni.platforms import current_platform
-from sglang_omni.scheduling.engine_factory import AsrEngineBuilder
+from sglang_omni.proto.request import StagePayload
+from sglang_omni.scheduling.engine_factory import (
+    AsrEngineBuilder,
+    GenerationDefaults,
+    SchedulerExtras,
+)
 from sglang_omni.scheduling.generation_batch_policy import (
     CudaGraphBackend,
     build_default_prefill_cuda_graph_bs,
 )
+from sglang_omni.scheduling.sglang_backend.output_processor import SGLangOutputProcessor
 from sglang_omni.utils.gpu_compat import get_visible_gpu_sm_version
+
+if TYPE_CHECKING:
+    from sglang.srt.hardware_backend.mlx.tp_worker import MlxTpModelWorker
+
+    from sglang_omni.models.fun_asr.sglang_model import (
+        FunAsrNanoForConditionalGeneration,
+    )
+    from sglang_omni.models.fun_asr.torch_mps_runner import FunASRTorchMpsModelRunner
+else:
+    pass
 
 logger = logging.getLogger(__name__)
 
 
-class FunASREngineBuilder(AsrEngineBuilder):
+class FunASREngineBuilder(AsrEngineBuilder[request_builders.FunASRRequestData]):
     model_name = "Fun-ASR"
     model_arch_override = "FunAsrNanoForConditionalGeneration"
     supports_breakable_prefill_cuda_graph = True
@@ -87,11 +108,11 @@ class FunASREngineBuilder(AsrEngineBuilder):
         self.request_build_max_workers = request_build_max_workers
         self.request_build_max_pending = request_build_max_pending
         self.stream_emit_interval_s = stream_emit_interval_s
-        self.tokenizer: Any = None
-        self.feature_extractor: Any = None
+        self.tokenizer: PreTrainedTokenizerBase | None = None
+        self.feature_extractor: FunAsrNanoFeatureExtractor | None = None
         self.audio_encoder_service: FunASRPreLMEncoderService | None = None
         self.device: str | None = None
-        self.torch_mps_model_runner: Any = None
+        self.torch_mps_model_runner: FunASRTorchMpsModelRunner | None = None
         self.context_length = 0
 
     def pre_infra_setup(self, checkpoint_dir: str) -> None:
@@ -125,13 +146,13 @@ class FunASREngineBuilder(AsrEngineBuilder):
 
         return use_mlx() or self.uses_torch_mps()
 
-    def adjust_overrides(self, overrides: dict[str, Any]) -> None:
+    def adjust_overrides(self, overrides: dict[str, object]) -> None:
         if self.uses_apple():
             overrides["enable_torch_compile"] = False
         else:
             pass
 
-    def validate_before_infrastructure(self, server_args: Any) -> None:
+    def validate_before_infrastructure(self, server_args: ServerArgs) -> None:
         if self.uses_apple():
             if not current_platform.is_mps():
                 raise ValueError(
@@ -170,7 +191,11 @@ class FunASREngineBuilder(AsrEngineBuilder):
             pass
         super().validate_before_infrastructure(server_args)
 
-    def make_model_runner(self, model_worker: Any, output_proc: Any) -> Any:
+    def make_model_runner(
+        self,
+        model_worker: ModelWorker | MlxTpModelWorker,
+        output_proc: SGLangOutputProcessor,
+    ) -> ModelRunner[request_builders.FunASRRequestData]:
         from sglang.srt.hardware_backend.mlx.runtime import use_mlx
 
         if use_mlx():
@@ -195,11 +220,11 @@ class FunASREngineBuilder(AsrEngineBuilder):
     def setup_model(
         self,
         *,
-        model_worker: Any,
+        model_worker: ModelWorker | MlxTpModelWorker,
         checkpoint_dir: str,
         device: str,
         gpu_id: int,
-        server_args: Any,
+        server_args: ServerArgs,
     ) -> None:
         if self.uses_torch_mps():
             from .torch_mps_runner import install_torch_mps_language_model
@@ -210,14 +235,14 @@ class FunASREngineBuilder(AsrEngineBuilder):
         else:
             pass
 
-    def make_abort_callback(self) -> Any | None:
+    def make_abort_callback(self) -> Callable[[str], None] | None:
         return (
             self.torch_mps_model_runner.abort_request
             if self.torch_mps_model_runner is not None
             else None
         )
 
-    def generation_defaults(self, *, dtype: str) -> dict[str, Any]:
+    def generation_defaults(self, *, dtype: str) -> GenerationDefaults:
         if self.uses_apple():
             # Audio embeddings are inserted only at first prefill. Token-only
             # prefix reuse and split prefill cannot reconstruct that sidecar.
@@ -238,7 +263,7 @@ class FunASREngineBuilder(AsrEngineBuilder):
             }
         else:
             pass
-        defaults: dict[str, Any] = {
+        defaults: GenerationDefaults = {
             "max_running_requests": self.max_running_requests,
             "disable_cuda_graph": False,
             "disable_overlap_schedule": True,
@@ -264,8 +289,8 @@ class FunASREngineBuilder(AsrEngineBuilder):
 
     def setup_model_resources(
         self,
-        model: Any,
-        server_args: Any,
+        model: FunAsrNanoForConditionalGeneration | None,
+        server_args: ServerArgs,
         *,
         generation_cuda_graph_enabled: bool,
     ) -> None:
@@ -320,7 +345,11 @@ class FunASREngineBuilder(AsrEngineBuilder):
             pass
         init_mm_embedding_cache(self.mm_embedding_cache_size_bytes)
 
-    def setup_runtime_resources(self, model: Any, server_args: Any) -> None:
+    def setup_runtime_resources(
+        self,
+        model: FunAsrNanoForConditionalGeneration | None,
+        server_args: ServerArgs | None,
+    ) -> None:
         if self.uses_apple() or not self.enable_pre_lm_encoder:
             return
         else:
@@ -339,7 +368,10 @@ class FunASREngineBuilder(AsrEngineBuilder):
             max_batch_wait_ms=self.pre_lm_max_batch_wait_ms,
         )
 
-    def make_adapters(self, model: Any) -> tuple[Any, Any]:
+    def make_adapters(self, model: object) -> tuple[
+        Callable[[StagePayload], request_builders.FunASRRequestData],
+        Callable[[request_builders.FunASRRequestData], StagePayload],
+    ]:
         del model
         return request_builders.make_fun_asr_scheduler_adapters(
             tokenizer=self.tokenizer,
@@ -350,7 +382,7 @@ class FunASREngineBuilder(AsrEngineBuilder):
             greedy_only=self.uses_apple(),
         )
 
-    def extra_scheduler_callbacks(self) -> dict[str, Any]:
+    def extra_scheduler_callbacks(self) -> dict[str, Callable[[], None] | None]:
         return {
             "shutdown_callback": (
                 self.audio_encoder_service.close
@@ -365,7 +397,9 @@ class FunASREngineBuilder(AsrEngineBuilder):
         else:
             pass
 
-    def extra_scheduler_kwargs(self) -> dict[str, Any]:
+    def extra_scheduler_kwargs(
+        self,
+    ) -> SchedulerExtras[request_builders.FunASRRequestData]:
         return {
             "stream_output_builder": request_builders.make_fun_asr_stream_output_builder(
                 tokenizer=self.tokenizer,
