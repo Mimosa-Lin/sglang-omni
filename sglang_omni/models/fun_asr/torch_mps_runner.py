@@ -6,13 +6,20 @@ from __future__ import annotations
 import gc
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 import torch
 from safetensors import safe_open
 from transformers import Qwen3Config, Qwen3ForCausalLM
 
 from sglang_omni.model_runner.audio_torch_mps import AudioTorchMpsModelRunner
+
+if TYPE_CHECKING:
+    from sglang_omni.models.fun_asr.sglang_model import (
+        FunAsrNanoForConditionalGeneration,
+    )
+else:
+    pass
 
 
 class FunASRTorchMpsModelRunner(AudioTorchMpsModelRunner):
@@ -47,7 +54,9 @@ def load_language_model(checkpoint: Path) -> Qwen3ForCausalLM:
     return model.eval()
 
 
-def install_torch_mps_language_model(model: Any, model_path: str) -> None:
+def install_torch_mps_language_model(
+    model: FunAsrNanoForConditionalGeneration, model_path: str
+) -> None:
     from huggingface_hub import snapshot_download
 
     checkpoint = Path(model_path).expanduser()
