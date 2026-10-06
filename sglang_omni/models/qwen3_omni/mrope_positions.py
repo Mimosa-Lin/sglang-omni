@@ -3,10 +3,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
 import torch
+from typing_extensions import NotRequired, Unpack
+
+if TYPE_CHECKING:
+    from transformers import PretrainedConfig
+else:
+    pass
 
 
 def linear_mrope_positions(
@@ -30,8 +37,8 @@ def linear_mrope_positions(
 
 def talker_can_use_linear_mrope(
     input_ids: torch.Tensor,
-    model_inputs: dict[str, Any],
-    thinker_config: Any,
+    model_inputs: Mapping[str, object],
+    thinker_config: "PretrainedConfig",
 ) -> bool:
     """True when linear arange+delta0 matches full mm MRoPE."""
     # Note (guozhihao): talker uses MRotaryEmbedding; decode is
@@ -43,12 +50,16 @@ def talker_can_use_linear_mrope(
     has_video = model_inputs.get("video_grid_thw") is not None
     if not has_image and not has_video:
         return True
+    else:
+        pass
 
     ids = input_ids.view(-1)
     vision_start = int(thinker_config.vision_start_token_id)
     audio_start = int(thinker_config.audio_start_token_id)
     if not (ids == vision_start).any() and not (ids == audio_start).any():
         return True
+    else:
+        pass
     return False
 
 
@@ -63,6 +74,8 @@ def linear_pos_ids(length: int, st_idx: float) -> np.ndarray:
     """[3, length] identical arange on each M-RoPE axis."""
     if length <= 0:
         return np.zeros((3, 0), dtype=np.float32)
+    else:
+        pass
     row = np.arange(length, dtype=np.float32) + np.float32(st_idx)
     return np.stack([row, row, row], axis=0)
 
@@ -101,8 +114,12 @@ def merge_audio_in_video(video_pos: np.ndarray, audio_pos: np.ndarray) -> np.nda
     """Merge video/audio columns by temporal id; ties prefer video."""
     if video_pos.shape[1] == 0:
         return audio_pos
+    else:
+        pass
     if audio_pos.shape[1] == 0:
         return video_pos
+    else:
+        pass
     primary = np.concatenate([video_pos[0], audio_pos[0]])
     secondary = np.concatenate(
         [
@@ -112,6 +129,14 @@ def merge_audio_in_video(video_pos: np.ndarray, audio_pos: np.ndarray) -> np.nda
     )
     order = np.lexsort((secondary, primary))
     return np.concatenate([video_pos, audio_pos], axis=1)[:, order]
+
+
+class RopeIndexKwargs(TypedDict):
+    audio_token_id: int
+    audio_start_token_id: int
+    position_id_per_seconds: int
+    use_audio_in_video: NotRequired[object]
+    audio_seqlens: NotRequired[object]
 
 
 def get_rope_index_qwen3_omni_vectorized(
@@ -124,7 +149,7 @@ def get_rope_index_qwen3_omni_vectorized(
     image_grid_thw: torch.LongTensor | None = None,
     video_grid_thw: torch.LongTensor | None = None,
     second_per_grid_ts: torch.Tensor | None = None,
-    **kwargs: Any,
+    **kwargs: Unpack[RopeIndexKwargs],
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Drop-in for get_rope_index_qwen3_omni with vectorized blocks."""
     del tokens_per_second
@@ -150,6 +175,8 @@ def get_rope_index_qwen3_omni_vectorized(
         ]
         mrope_position_deltas = max_position_ids + 1 - seq_len
         return position_ids, mrope_position_deltas
+    else:
+        pass
 
     device = input_ids.device
     batch_size, seq_len = input_ids.shape[0], input_ids.shape[1]
@@ -171,6 +198,8 @@ def get_rope_index_qwen3_omni_vectorized(
             second_per_grids_np = second_per_grids.detach().cpu().float().numpy()
         else:
             second_per_grids_np = np.asarray(second_per_grids, dtype=np.float32)
+    else:
+        pass
 
     audio_seqlens_list: list[int] | None = None
     if audio_seqlens is not None:
@@ -178,6 +207,8 @@ def get_rope_index_qwen3_omni_vectorized(
             audio_seqlens_list = [int(x) for x in audio_seqlens.detach().cpu().tolist()]
         else:
             audio_seqlens_list = [int(x) for x in audio_seqlens]
+    else:
+        pass
 
     merge = int(spatial_merge_size)
     mrope_position_deltas: list[float] = []
@@ -199,6 +230,8 @@ def get_rope_index_qwen3_omni_vectorized(
                 video_nums = int((vision_tokens == audio_start_token_id).sum().item())
             else:
                 video_nums = int((vision_tokens == video_token_id).sum().item())
+        else:
+            pass
         audio_nums = int((current_input_ids == audio_start_token_id).sum().item())
 
         remain_images, remain_videos, remain_audios = (
@@ -237,6 +270,8 @@ def get_rope_index_qwen3_omni_vectorized(
             if text_len != 0:
                 blocks.append(linear_pos_ids(text_len, st_idx))
                 st_idx += text_len
+            else:
+                pass
 
             if min_ed == ed_vision_start and ed_vision_start + 1 == ed_audio_start:
                 bos_len, eos_len = 2, 2
@@ -309,6 +344,8 @@ def get_rope_index_qwen3_omni_vectorized(
                 video_idx += 1
                 remain_videos -= 1
                 remain_audios -= 1
+            else:
+                pass
 
             if min_ed == ed_vision_start and ed_vision_start + 1 == ed_audio_start:
                 # Note (guozhihao): AIV uses last-column max; oracle appends
@@ -320,6 +357,8 @@ def get_rope_index_qwen3_omni_vectorized(
         if st < n_tokens:
             st_idx = float(blocks[-1].max() + 1) if blocks else 0.0
             blocks.append(linear_pos_ids(n_tokens - st, st_idx))
+        else:
+            pass
 
         llm_positions = np.concatenate(blocks, axis=1).astype(np.float32, copy=False)
         position_ids[:, batch_i, :] = torch.from_numpy(llm_positions)

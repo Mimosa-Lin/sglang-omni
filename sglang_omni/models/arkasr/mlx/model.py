@@ -6,6 +6,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Protocol, TypeAlias
+
 import mlx.core as mx
 from mlx import nn
 from mlx_lm.models.activations import swiglu
@@ -14,12 +17,25 @@ from mlx_lm.models.cache import KVCache
 
 from .config import AudioEncoderConfig, ModelConfig, TextConfig
 
+MlxQuantizedTensor: TypeAlias = tuple[mx.array, mx.array, mx.array]
 
-def rope_safe(rope, x: mx.array, offset: int) -> mx.array:
+
+class MlxAttentionCache(Protocol):
+    @property
+    def offset(self) -> int | mx.array: ...
+
+    def update_and_fetch(
+        self, keys: mx.array, values: mx.array, /
+    ) -> tuple[mx.array, mx.array] | tuple[MlxQuantizedTensor, MlxQuantizedTensor]: ...
+
+
+def rope_safe(rope: nn.RoPE, x: mx.array, offset: int | mx.array) -> mx.array:
     """Pad batched single-token decode to avoid an mx.fast.rope kernel bug."""
     if x.ndim == 4 and x.shape[0] > 1 and x.shape[2] == 1:
         x = mx.concatenate([x, mx.zeros_like(x)], axis=2)
         return rope(x, offset=offset)[:, :, :1, :]
+    else:
+        pass
     return rope(x, offset=offset)
 
 
@@ -99,6 +115,8 @@ class WhisperRoPESdpaAttention(nn.Module):
         if rotary_pos_emb is not None:
             queries = apply_rotary_pos_emb(queries, rotary_pos_emb)
             keys = apply_rotary_pos_emb(keys, rotary_pos_emb)
+        else:
+            pass
 
         attn_output = mx.fast.scaled_dot_product_attention(
             queries, keys, values, scale=self.head_dim**-0.5, mask=attention_mask
@@ -142,6 +160,8 @@ class WhisperSpecialEncoderLayer(nn.Module):
         if hidden_states.dtype == mx.float16:
             clamp_value = 65504 - 1000
             hidden_states = mx.clip(hidden_states, min=-clamp_value, max=clamp_value)
+        else:
+            pass
         return hidden_states
 
 
@@ -160,6 +180,8 @@ class ArkAudioTower(nn.Module):
         self.layers = [WhisperSpecialEncoderLayer(wc) for _ in range(wc.encoder_layers)]
         if self.use_rope:
             self.rotary_embedding = ArkRotaryEmbedding(wc.head_dim // 2)
+        else:
+            pass
 
     def __call__(
         self,
@@ -175,16 +197,24 @@ class ArkAudioTower(nn.Module):
                     f"{tuple(attention_mask.shape)} does not match mel frames "
                     f"{expected_shape}"
                 )
+            else:
+                pass
             input_frame_mask = attention_mask
+        else:
+            pass
 
         # MLX Conv1d expects channels last.
         hidden_states = input_features.transpose(0, 2, 1)
         if input_frame_mask is not None:
             hidden_states = hidden_states * input_frame_mask[..., None]
+        else:
+            pass
 
         hidden_states = nn.gelu(self.conv1(hidden_states))
         if input_frame_mask is not None:
             hidden_states = hidden_states * input_frame_mask[..., None]
+        else:
+            pass
         hidden_states = nn.gelu(self.conv2(hidden_states))
 
         frame_mask = None
@@ -195,6 +225,8 @@ class ArkAudioTower(nn.Module):
                 hidden_states.dtype
             )
             hidden_states = hidden_states * frame_mask[..., None]
+        else:
+            pass
 
         if self.use_rope:
             rotary_pos_emb = self.rotary_embedding.get_emb(
@@ -214,12 +246,14 @@ class ArkAudioTower(nn.Module):
             )
             if frame_mask is not None:
                 hidden_states = hidden_states * frame_mask[..., None]
+            else:
+                pass
 
         # The checkpoint applies its effective LayerNorm in the adapter.
         return hidden_states
 
 
-class _Gelu(nn.Module):
+class Gelu(nn.Module):
     """Preserve the checkpoint's adapting layer indices."""
 
     def __call__(self, x: mx.array) -> mx.array:
@@ -241,9 +275,11 @@ class ArkAudioMLPAdapter(nn.Module):
             raise ValueError(
                 f"ARK-ASR MLX adapter supports gelu only, got {config.mlp_adapter_act}"
             )
+        else:
+            pass
         self.adapting = [
             nn.Linear(input_dim, output_dim * 2),
-            _Gelu(),
+            Gelu(),
             nn.Linear(output_dim * 2, output_dim),
         ]
 
@@ -257,6 +293,8 @@ class ArkAudioMLPAdapter(nn.Module):
         if attention_mask is not None:
             frame_mask = attention_mask[:, ::2]
             encoded = encoded * frame_mask[..., None]
+        else:
+            pass
 
         bsz = encoded.shape[0]
         seq_len = encoded.shape[1]
@@ -271,8 +309,12 @@ class ArkAudioMLPAdapter(nn.Module):
                         dtype=encoded.dtype,
                     )
                     encoded = mx.concatenate([encoded, pad], axis=1)
+                else:
+                    pass
             else:
                 encoded = encoded[:, :target_len]
+        else:
+            pass
 
         encoded = encoded.reshape(bsz, -1, encoded.shape[-1] * merge)
         encoded = self.adapting[0](encoded)
@@ -309,7 +351,7 @@ class TextAttention(nn.Module):
         self,
         hidden_states: mx.array,
         mask: str | mx.array | None = None,
-        cache: KVCache | None = None,
+        cache: MlxAttentionCache | None = None,
     ) -> mx.array:
         B, L, _ = hidden_states.shape
 
@@ -335,6 +377,8 @@ class TextAttention(nn.Module):
 
         if cache is not None:
             keys, values = cache.update_and_fetch(keys, values)
+        else:
+            pass
 
         output = scaled_dot_product_attention(
             queries,
@@ -385,7 +429,7 @@ class TextDecoderLayer(nn.Module):
         self,
         hidden_states: mx.array,
         mask: str | mx.array | None = None,
-        cache: KVCache | None = None,
+        cache: MlxAttentionCache | None = None,
     ) -> mx.array:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -418,19 +462,28 @@ class TextModel(nn.Module):
         self,
         input_ids: mx.array | None = None,
         inputs_embeds: mx.array | None = None,
-        cache: list[KVCache] | None = None,
+        cache: Sequence[MlxAttentionCache | None] | None = None,
     ) -> mx.array:
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
+        else:
+            pass
 
         hidden_states = inputs_embeds
 
-        if cache is None:
-            cache = [None] * len(self.layers)
-        mask = create_attention_mask(hidden_states, cache[0])
+        layer_caches = cache
+        if layer_caches is None:
+            layer_caches = [None] * len(self.layers)
+        else:
+            pass
+        mask = create_attention_mask(hidden_states, layer_caches[0])
 
         for i, layer in enumerate(self.layers):
-            hidden_states = layer(hidden_states, mask=mask, cache=cache[i])
+            hidden_states = layer(
+                hidden_states,
+                mask=mask,
+                cache=layer_caches[i],
+            )
 
         return self.norm(hidden_states)
 
@@ -458,6 +511,8 @@ class ArkasrModel(nn.Module):
     def apply_lm_head(self, hidden_states: mx.array) -> mx.array:
         if self.lm_head is not None:
             return self.lm_head(hidden_states)
+        else:
+            pass
         return self.model.embed_tokens.as_linear(hidden_states)
 
     def get_audio_features(
@@ -471,6 +526,8 @@ class ArkasrModel(nn.Module):
         )
         if features.shape[0] != 1:
             raise ValueError("ARK-ASR MLX audio prefill supports one request")
+        else:
+            pass
         return features[0]
 
     def build_inputs_embeds(
@@ -489,13 +546,19 @@ class ArkasrModel(nn.Module):
                 "ARK-ASR audio placeholder and feature counts differ: "
                 f"{num_audio_tokens} placeholders, {audio_features.shape[0]} features"
             )
+        else:
+            pass
         if input_ids.shape[0] != 1:
             raise ValueError("ARK-ASR MLX audio prefill supports one request")
+        else:
+            pass
         audio_end = audio_start + num_audio_tokens
         if audio_start < 0 or audio_end > input_ids.shape[1]:
             raise ValueError(
                 f"ARK-ASR audio span [{audio_start}, {audio_end}) is out of bounds"
             )
+        else:
+            pass
 
         inputs_embeds[0, audio_start:audio_end, :] = audio_features
         return inputs_embeds
@@ -503,7 +566,7 @@ class ArkasrModel(nn.Module):
     def forward_last_logits(
         self,
         inputs_embeds: mx.array,
-        cache: list[KVCache] | None = None,
+        cache: Sequence[MlxAttentionCache | None] | None = None,
     ) -> mx.array:
         hidden_states = self.model(inputs_embeds=inputs_embeds, cache=cache)[:, -1:, :]
         return self.apply_lm_head(hidden_states)
@@ -512,7 +575,7 @@ class ArkasrModel(nn.Module):
         self,
         input_ids: mx.array,
         input_embeddings: mx.array | None = None,
-        cache: list[KVCache] | None = None,
+        cache: Sequence[MlxAttentionCache | None] | None = None,
     ) -> mx.array:
         if input_embeddings is None:
             inputs_embeds = self.model.embed_tokens(input_ids)
@@ -532,12 +595,16 @@ class ArkasrModel(nn.Module):
         for k, v in weights.items():
             if k == "lm_head.weight" and self.config.text_config.tie_word_embeddings:
                 continue
+            else:
+                pass
             if (
                 k.startswith("audio_encoder.whisper.conv")
                 and k.endswith(".weight")
                 and len(v.shape) == 3
             ):
                 v = v.transpose(0, 2, 1)
+            else:
+                pass
             sanitized[k] = v
         return sanitized
 

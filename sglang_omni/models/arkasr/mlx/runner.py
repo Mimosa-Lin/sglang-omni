@@ -33,19 +33,23 @@ class ArkasrMlxModelRunner(AudioMlxModelRunner):
             revision=self.revision,
         )
         ensure_remote_code_allowed(model_path, self.trust_remote_code)
-        logger.info("Loading native MLX ARK-ASR model: %s", model_path)
+        logger.info(f"Loading native MLX ARK-ASR model: {model_path}")
         started = time.perf_counter()
         self.model, config = load_model(
             model_path,
             get_model_classes=lambda config: (ArkasrModel, ModelConfig),
         )
         presets = {"mlx_q4": (4, 64), "mlx_q8": (8, 64)}
-        if self._quantization in presets and "quantization" not in config:
-            bits, group_size = presets[self._quantization]
+        if (
+            self._quantization in presets  # noqa: leading-underscore  # upstream name
+            and "quantization" not in config
+        ):
+            bits, group_size = presets[
+                self._quantization  # noqa: leading-underscore  # upstream name
+            ]
             logger.info(
-                "Quantizing native MLX ARK-ASR text stack: bits=%d, group_size=%d",
-                bits,
-                group_size,
+                f"Quantizing native MLX ARK-ASR text stack: "
+                f"bits={bits}, group_size={group_size}"
             )
             self.model, _config = quantize_model(
                 self.model,
@@ -53,10 +57,11 @@ class ArkasrMlxModelRunner(AudioMlxModelRunner):
                 group_size=group_size,
                 bits=bits,
             )
+        else:
+            pass
         mx.eval(self.model.parameters())
         logger.info(
-            "Loaded native MLX ARK-ASR model in %.2fs",
-            time.perf_counter() - started,
+            f"Loaded native MLX ARK-ASR model in {time.perf_counter() - started:.2f}s"
         )
 
 

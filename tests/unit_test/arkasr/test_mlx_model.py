@@ -7,16 +7,18 @@ import pytest
 
 mx = pytest.importorskip("mlx.core")
 
-from sglang_omni.models.arkasr.mlx.config import (
+from sglang_omni.models.arkasr.mlx.config import (  # noqa: E402
     AudioEncoderConfig,
     ModelConfig,
     TextConfig,
 )
-from sglang_omni.models.arkasr.mlx.model import ArkasrModel
-from sglang_omni.models.arkasr.mlx.runner import make_arkasr_mlx_runner_class
+from sglang_omni.models.arkasr.mlx.model import ArkasrModel  # noqa: E402
+from sglang_omni.models.arkasr.mlx.runner import (  # noqa: E402
+    make_arkasr_mlx_runner_class,
+)
 
 
-def _tiny_model(*, tie_word_embeddings: bool = True) -> ArkasrModel:
+def tiny_model(*, tie_word_embeddings: bool = True) -> ArkasrModel:
     mx.random.seed(0)
     return ArkasrModel(
         ModelConfig(
@@ -76,7 +78,7 @@ def test_model_config_from_dict_flat_layout() -> None:
 
 
 def test_native_mlx_audio_prefill_forward() -> None:
-    model = _tiny_model()
+    model = tiny_model()
     audio_features = model.get_audio_features(mx.zeros((1, 8, 20)), None)
     input_ids = mx.array([[1, *([10] * audio_features.shape[0]), 2]], dtype=mx.int32)
     embeddings = model.build_inputs_embeds(
@@ -93,7 +95,7 @@ def test_native_mlx_audio_prefill_forward() -> None:
 
 
 def test_native_mlx_prefill_only_projects_last_position() -> None:
-    model = _tiny_model()
+    model = tiny_model()
     input_ids = mx.array([[1, 2, 3]], dtype=mx.int32)
     embeddings = model.embed_tokens(input_ids)
 
@@ -127,11 +129,13 @@ def test_native_mlx_rope_safe_matches_per_sequence_rope() -> None:
 def test_runner_chains_native_single_request_decode() -> None:
     runner_class = make_arkasr_mlx_runner_class()
     runner = object.__new__(runner_class)
-    runner.model = _tiny_model()
-    runner._req_token_ids = {"req": [1]}
-    runner._req_caches = {"req": runner.model.make_cache()}
-    runner._decode_step_ct = 0
-    runner._clear_steps = 0
+    runner.model = tiny_model()
+    runner._req_token_ids = {"req": [1]}  # noqa: leading-underscore
+    runner._req_caches = {  # noqa: leading-underscore
+        "req": runner.model.make_cache()
+    }
+    runner._decode_step_ct = 0  # noqa: leading-underscore  # upstream name
+    runner._clear_steps = 0  # noqa: leading-underscore  # upstream name
 
     first = runner.decode_batch_start(["req"])
     second = runner.decode_batch_start_chained(first)
@@ -141,12 +145,14 @@ def test_runner_chains_native_single_request_decode() -> None:
 
     assert first.lazy_tokens.shape == (1,)
     assert second.lazy_tokens.shape == (1,)
-    assert runner._req_caches["req"][0].offset == 2
-    assert len(runner._req_token_ids["req"]) == 3
+    assert (
+        runner._req_caches["req"][0].offset == 2  # noqa: leading-underscore
+    )
+    assert len(runner._req_token_ids["req"]) == 3  # noqa: leading-underscore
 
 
 def test_native_mlx_sanitize_checkpoint_layout() -> None:
-    model = _tiny_model()
+    model = tiny_model()
     weights = {
         "lm_head.weight": mx.zeros((64, 32)),
         "model.embed_tokens.weight": mx.zeros((64, 32)),
@@ -166,7 +172,7 @@ def test_native_mlx_quantizes_text_only() -> None:
     from mlx_lm.utils import quantize_model
 
     model, config = quantize_model(
-        _tiny_model(),
+        tiny_model(),
         {},
         group_size=32,
         bits=4,
@@ -207,7 +213,7 @@ def test_native_mlx_audio_parity_with_torch() -> None:
     )
     torch.manual_seed(0)
     torch_adapter = TorchAdapter(config).eval()
-    model = _tiny_model()
+    model = tiny_model()
     weights = {}
     for key, value in torch_adapter.state_dict().items():
         array = value.detach().cpu().float().numpy()
@@ -229,7 +235,7 @@ def test_native_mlx_audio_parity_with_torch() -> None:
 
 
 def test_native_mlx_audio_features_require_single_request() -> None:
-    model = _tiny_model()
+    model = tiny_model()
 
     with pytest.raises(ValueError, match="one request"):
         model.get_audio_features(mx.zeros((2, 8, 20)), None)

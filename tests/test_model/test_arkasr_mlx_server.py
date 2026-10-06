@@ -24,7 +24,7 @@ STARTUP_TIMEOUT = 600
 REQUEST_TIMEOUT = 180
 
 
-def _normalize_transcript(text: str) -> str:
+def normalize_transcript(text: str) -> str:
     return " ".join(re.findall(r"\w+", text.casefold()))
 
 
@@ -42,9 +42,7 @@ def test_arkasr_mlx_server_transcribes_audio(
         pytest.fail(f"ARK-ASR integration audio does not exist: {audio_path}")
     expected_text = os.environ.get(EXPECTED_TEXT_ENV)
     if audio_override and expected_text is None:
-        pytest.fail(
-            f"Set {EXPECTED_TEXT_ENV} when overriding the integration audio"
-        )
+        pytest.fail(f"Set {EXPECTED_TEXT_ENV} when overriding the integration audio")
     expected_text = expected_text or DEFAULT_EXPECTED_TEXT
 
     port = find_available_port()
@@ -94,7 +92,7 @@ def test_arkasr_mlx_server_transcribes_audio(
         assert response.status_code == 200, response.text
         payload = response.json()
         assert isinstance(payload.get("text"), str)
-        assert _normalize_transcript(payload["text"]) == _normalize_transcript(
+        assert normalize_transcript(payload["text"]) == normalize_transcript(
             expected_text
         )
     finally:

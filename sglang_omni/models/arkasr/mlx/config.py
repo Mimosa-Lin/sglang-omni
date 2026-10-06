@@ -90,16 +90,20 @@ class ModelConfig:
     max_whisper_length: int = 1500
     spec_aug: bool = False
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.audio_config is None:
             self.audio_config = AudioEncoderConfig()
         elif isinstance(self.audio_config, dict):
             self.audio_config = AudioEncoderConfig.from_dict(self.audio_config)
+        else:
+            pass
 
         if self.text_config is None:
             self.text_config = TextConfig()
         elif isinstance(self.text_config, dict):
             self.text_config = TextConfig.from_dict(self.text_config)
+        else:
+            pass
 
     @classmethod
     def from_dict(cls, params: dict[str, object]) -> ModelConfig:
@@ -109,6 +113,8 @@ class ModelConfig:
         # the Qwen2 LM parameters at the top level.
         if "whisper_config" in params:
             params["audio_config"] = params.pop("whisper_config")
+        else:
+            pass
 
         if "audio_config" in params and isinstance(params["audio_config"], dict):
             params["audio_config"] = AudioEncoderConfig.from_dict(
@@ -116,6 +122,8 @@ class ModelConfig:
             )
         elif "audio_config" not in params:
             params["audio_config"] = AudioEncoderConfig()
+        else:
+            pass
 
         text_keys = set(inspect.signature(TextConfig).parameters) - {"model_type"}
         text_params = {k: params.pop(k) for k in list(params) if k in text_keys}
@@ -123,6 +131,8 @@ class ModelConfig:
             params["text_config"] = TextConfig.from_dict(text_params)
         elif isinstance(params["text_config"], dict):
             params["text_config"] = TextConfig.from_dict(params["text_config"])
+        else:
+            pass
 
         return cls(
             **{
