@@ -383,7 +383,8 @@ def test_apple_profile_skips_cuda_resources_and_uses_greedy_requests(monkeypatch
     builder.setup_runtime_resources(object(), object())
     assert builder.audio_encoder_service is None
     options = builder.extra_scheduler_kwargs()
-    assert options["enable_async_decode"] is False
+    assert options["enable_async_decode"] is mlx
+    assert options["async_decode_min_batch_size"] == (1 if mlx else 2)
     assert options["prefill_coalesce_requests"] == 0
     assert options["request_build_max_workers"] == 1
     monkeypatch.setattr(
@@ -392,18 +393,24 @@ def test_apple_profile_skips_cuda_resources_and_uses_greedy_requests(monkeypatch
     assert builder.make_adapters(object())["greedy_only"]
 
 
-@pytest.mark.parametrize("mlx", [False, True])
 @pytest.mark.parametrize(
-    "override,match",
+    "mlx,override,match",
     [
-        ({"max_running_requests": 2}, "max_running_requests=1"),
-        ({"disable_radix_cache": False}, "disabled radix cache"),
-        ({"chunked_prefill_size": 128}, "chunked prefill"),
-        ({"mlx_enable_sampling": True}, "mlx_enable_sampling=False"),
-        ({"quantization": "mlx_q4"}, "unquantized"),
+        (False, {"max_running_requests": 2}, "max_running_requests=1"),
+        (True, {"max_running_requests": 2}, "max_running_requests=1"),
+        (False, {"disable_radix_cache": False}, "disabled radix cache"),
+        (True, {"disable_radix_cache": False}, "disabled radix cache"),
+        (False, {"chunked_prefill_size": 128}, "chunked prefill"),
+        (True, {"chunked_prefill_size": 128}, "chunked prefill"),
+        (False, {"mlx_enable_sampling": True}, "mlx_enable_sampling=False"),
+        (True, {"mlx_enable_sampling": True}, "mlx_enable_sampling=False"),
+        (False, {"quantization": "mlx_q4"}, "unquantized"),
+        (True, {"quantization": "awq"}, "mlx_q4 or mlx_q8"),
     ],
 )
-def test_apple_rejects_unsupported_runtime_options(monkeypatch, mlx, override, match):
+def test_apple_rejects_unsupported_runtime_options(
+    monkeypatch, mlx, override, match
+):
     builder = apple_builder(monkeypatch, mlx=mlx)
     args = {
         **builder.generation_defaults(dtype="bfloat16"),
@@ -413,3 +420,17 @@ def test_apple_rejects_unsupported_runtime_options(monkeypatch, mlx, override, m
     }
     with pytest.raises(ValueError, match=match):
         builder.validate_before_infrastructure(SimpleNamespace(**args))
+
+
+@pytest.mark.parametrize("quantization", ["mlx_q4", "mlx_q8"])
+def test_mlx_accepts_text_stack_quantization(monkeypatch, quantization):
+    builder = apple_builder(monkeypatch, mlx=True)
+    monkeypatch.setattr(
+        engine_factory, "validate_generation_batch_policy", lambda **kwargs: None
+    )
+    args = {
+        **builder.generation_defaults(dtype="bfloat16"),
+        "mlx_enable_sampling": False,
+        "quantization": quantization,
+    }
+    builder.validate_before_infrastructure(SimpleNamespace(**args))

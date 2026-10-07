@@ -273,6 +273,10 @@ class FunASRModel(nn.Module):
     def make_cache(self):
         return [KVCache() for _ in self.layers]
 
+    def quant_predicate(self, path: str, module: nn.Module) -> bool:
+        """Quantize the text stack while preserving audio model accuracy."""
+        return not path.startswith(("audio_tower", "multi_modal_projector"))
+
     def sanitize(self, weights):
         result = {}
         for key, value in weights.items():

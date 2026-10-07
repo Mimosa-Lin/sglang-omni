@@ -225,6 +225,22 @@ def test_mlx_weight_mapping_transposes_conv_once():
     assert model.sanitize(result)[key].shape == (8, 3, 1)
 
 
+def test_mlx_quantization_keeps_audio_stack_full_precision():
+    model = FunASRModel(tiny_config())
+
+    assert not model.quant_predicate(
+        "audio_tower.layers.0.mlp.fc1", model.audio_tower.layers[0].mlp.fc1
+    )
+    assert not model.quant_predicate(
+        "multi_modal_projector.linear_1", model.multi_modal_projector.linear_1
+    )
+    assert model.quant_predicate(
+        "model.layers.0.self_attn.q_proj",
+        model.model.layers[0].self_attn.q_proj,
+    )
+    assert model.quant_predicate("model.embed_tokens", model.model.embed_tokens)
+
+
 def test_mlx_config_requires_flat_checkpoint_blocks():
     # A pre-flat checkpoint has no audio_config block at all.
     with pytest.raises(KeyError, match="audio_config"):

@@ -133,18 +133,20 @@ class FunASREngineBuilder(AsrEngineBuilder[request_builders.FunASRRequestData]):
         )
 
     def uses_torch_mps(self) -> bool:
-        from sglang.srt.hardware_backend.mlx.runtime import use_mlx
-
         return (
-            not use_mlx()
+            not self.uses_mlx()
             and self.device is not None
             and self.device.split(":")[0] == "mps"
         )
 
-    def uses_apple(self) -> bool:
+    @staticmethod
+    def uses_mlx() -> bool:
         from sglang.srt.hardware_backend.mlx.runtime import use_mlx
 
-        return use_mlx() or self.uses_torch_mps()
+        return use_mlx()
+
+    def uses_apple(self) -> bool:
+        return self.uses_mlx() or self.uses_torch_mps()
 
     def adjust_overrides(self, overrides: dict[str, object]) -> None:
         if self.uses_apple():
@@ -181,9 +183,19 @@ class FunASREngineBuilder(AsrEngineBuilder[request_builders.FunASRRequestData]):
                 )
             else:
                 pass
-            if server_args.quantization is not None:
+            if self.uses_torch_mps() and server_args.quantization is not None:
                 raise ValueError(
-                    "Fun-ASR Apple currently requires unquantized HF weights"
+                    "Fun-ASR Torch/MPS currently requires unquantized HF weights"
+                )
+            else:
+                pass
+            if self.uses_mlx() and server_args.quantization not in {
+                None,
+                "mlx_q4",
+                "mlx_q8",
+            }:
+                raise ValueError(
+                    "Fun-ASR MLX quantization must be mlx_q4 or mlx_q8"
                 )
             else:
                 pass
@@ -400,15 +412,22 @@ class FunASREngineBuilder(AsrEngineBuilder[request_builders.FunASRRequestData]):
     def extra_scheduler_kwargs(
         self,
     ) -> SchedulerExtras[request_builders.FunASRRequestData]:
+        mlx_mode = self.uses_mlx()
         return {
             "stream_output_builder": request_builders.make_fun_asr_stream_output_builder(
                 tokenizer=self.tokenizer,
                 min_emit_interval_s=self.stream_emit_interval_s,
             ),
             "enable_async_decode": (
-                False if self.uses_apple() else self.enable_async_decode
+                self.enable_async_decode
+                if mlx_mode
+                else False
+                if self.uses_torch_mps()
+                else self.enable_async_decode
             ),
-            "async_decode_min_batch_size": self.async_decode_min_batch_size,
+            "async_decode_min_batch_size": (
+                1 if mlx_mode else self.async_decode_min_batch_size
+            ),
             "prefill_coalesce_requests": (
                 0 if self.uses_apple() else self.prefill_coalesce_requests
             ),
